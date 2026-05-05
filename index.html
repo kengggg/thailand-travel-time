@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<title>★ แผนที่เวลาเดินทางไทย — เลือกเมือง</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Noto+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    font-family: 'Google Sans', 'Noto Sans Thai', sans-serif;
+    background: #efece2;
+    color: #1a1a1a;
+    min-height: 100vh;
+    padding: 24px 16px;
+  }
+  .frame {
+    max-width: 1300px;
+    margin: 0 auto;
+    background: white;
+    border: 2px solid #1a1a1a;
+    box-shadow: 6px 6px 0 #1a1a1a;
+  }
+
+  /* City picker — sits at top of frame, above the SVG. */
+  .picker {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 18px;
+    border-bottom: 1px solid #1a1a1a;
+    background: #fafaf2;
+  }
+  .picker-label {
+    font-size: 14px;
+    color: #555;
+    font-weight: 500;
+    margin-right: 4px;
+  }
+  #picker-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .picker-btn {
+    padding: 7px 14px;
+    border: 1.5px solid #1a1a1a;
+    background: white;
+    color: #1a1a1a;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: 0;
+    transition: background 0.12s, color 0.12s;
+  }
+  .picker-btn:hover {
+    background: #f0e8c8;
+  }
+  .picker-btn.active {
+    background: #1a1a1a;
+    color: white;
+  }
+  .picker-btn[data-empty="true"]::after {
+    content: " 🏗";
+    font-size: 12px;
+    opacity: 0.7;
+  }
+
+  svg { display: block; width: 100%; height: auto; }
+
+  .title-bar { fill: #0a3982; stroke: #051d44; stroke-width: 1.5; }
+  .title-text { fill: white; font-weight: 700; }
+  .star { fill: #ffd700; font-weight: 700; }
+
+  .ring { fill: none; stroke: #b5b5b0; stroke-width: 0.7; stroke-dasharray: 2 3; }
+  .ring-axis { fill: none; stroke: #d4d4cc; stroke-width: 0.6; stroke-dasharray: 1 2; }
+  .ring-label {
+    fill: #777;
+    font-size: 13px;
+    font-family: 'Google Sans', 'Noto Sans Thai', sans-serif;
+    font-weight: 500;
+  }
+
+  .spoke  { stroke: #555; stroke-width: 1.6; }
+  .leader { stroke: #888; stroke-width: 0.6; fill: none; }
+
+  /* Dense tours (≥50 destinations, e.g. nationwide): shrink labels and the
+     time-numeral so 76 + provinces with long Thai names ("ประจวบคีรีขันธ์")
+     fit without bleeding past the SVG edges. Lighter leader strokes keep
+     the cross-chart connectors (from balanceSides) from accumulating into
+     visual noise. */
+  svg.dense .amphoe-label { font-size: 11px; }
+  svg.dense .amphoe-time  { font-size: 11px; }
+  svg.dense .ring-label   { font-size: 11px; }
+  svg.dense .leader       { stroke: #aaa; stroke-width: 0.5; }
+
+  /* Interaction state. */
+  [data-amphoe] { transition: opacity 0.12s ease; }
+  svg[data-active] [data-amphoe] {
+    opacity: 0.18;
+    pointer-events: none;
+  }
+  svg[data-active] [data-amphoe].active {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  circle.marker.selected { r: 8.5; stroke-width: 1.5; }
+  text.amphoe-label.selected { font-weight: 700; }
+
+  .marker {
+    fill: #ffd700;
+    stroke: #1a1a1a;
+    stroke-width: 1.2;
+  }
+  .center-circle {
+    fill: #ffd700;
+    stroke: #1a1a1a;
+    stroke-width: 2;
+  }
+  .center-text {
+    fill: #1a1a1a;
+    font-weight: 700;
+    font-size: 15px;
+    text-anchor: middle;
+  }
+
+  .amphoe-label { fill: #1a1a1a; font-size: 13px; font-weight: 500; }
+  .amphoe-time { fill: #555; font-family: 'Google Sans', 'Noto Sans Thai', sans-serif; font-weight: 600; }
+
+  .note-box { fill: rgba(255,255,255,0.96); stroke: #1a1a1a; stroke-width: 1; }
+  .note-text { font-size: 12px; fill: #333; }
+  .note-title { font-size: 13px; fill: #1a1a1a; font-weight: 700; }
+  .compass-text { font-size: 13px; fill: #888; font-weight: 600; font-family: 'Google Sans', 'Noto Sans Thai', sans-serif; }
+
+  .empty-state {
+    fill: #888;
+    text-anchor: middle;
+    font-size: 26px;
+    font-weight: 500;
+  }
+  .empty-state-hint {
+    fill: #aaa;
+    text-anchor: middle;
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<div class="frame">
+
+  <!-- City picker -->
+  <div class="picker">
+    <span class="picker-label">เลือกเมือง:</span>
+    <div id="picker-buttons"></div>
+  </div>
+
+  <svg viewBox="0 0 1300 1180" xmlns="http://www.w3.org/2000/svg">
+
+    <!-- Title bar (rendered dynamically per city) -->
+    <g id="title-group"></g>
+
+    <!-- Note box (rendered dynamically per city) -->
+    <g id="note-group"></g>
+
+    <!-- Compass hint -->
+    <text x="660" y="200" class="compass-text" text-anchor="middle">↑ เหนือ</text>
+
+    <!-- Chart group: cardinal axes are static; everything else is dynamic. -->
+    <g transform="translate(660, 670)" id="chart">
+      <line class="ring-axis" x1="-460" y1="0" x2="460" y2="0"/>
+      <line class="ring-axis" x1="0" y1="-460" x2="0" y2="460"/>
+
+      <g id="rings"></g>
+      <g id="ring-labels"></g>
+      <g id="spokes"></g>
+      <g id="markers"></g>
+      <g id="labels"></g>
+      <g id="empty-state"></g>
+      <g id="center"></g>
+    </g>
+  </svg>
+</div>
+
+<script src="data/cnx-district.js"></script>
+<script src="data/cnx-nationwide.js"></script>
+<script src="data/bkk-district.js"></script>
+<script src="data/bkk-district-transit.js"></script>
+<script src="data/bkk-nationwide.js"></script>
+<script>
+// ─── City registry & picker ───────────────────────────────────────────
+const REGISTRY = window.CITY_REGISTRY || {};
+// Display order in picker: Bangkok before Chiang Mai; within each city, district
+// (drive) → district (transit) → nationwide.
+const ORDER = [
+  "bkk-district", "bkk-district-transit", "bkk-nationwide",
+  "cnx-district", "cnx-nationwide",
+].filter(k => REGISTRY[k]);
+
+const STORAGE_KEY = "thailand-travel-time:tour";
+
+const pickInitialTour = () => {
+  // 1. localStorage → respect user's last choice
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved && REGISTRY[saved]) return saved;
+  // 2. default = bkk-district if it has data, else first tour with data
+  const desired = "bkk-district";
+  if (REGISTRY[desired]?.rows?.length) return desired;
+  const firstWithData = ORDER.find(k => REGISTRY[k].rows.length > 0);
+  return firstWithData ?? desired;
+};
+
+// ─── Constants ────────────────────────────────────────────────────────
+const SVG_NS = "http://www.w3.org/2000/svg";
+const CHART_R_MAX = 420;   // px — outermost ring radius target
+const CHART_R_MIN = 50;    // px — center circle radius
+// Includes hour-scale steps for cross-Thailand tours (CNX ↔ Narathiwat ≈ 14+ h).
+const RING_STEPS = [5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 360, 480, 720];
+const TARGET_RINGS = 5;
+const MIN_GAP = 17;
+const NUDGE_DX = 30;
+const X_SIMILARITY = 80;
+const HIT_RADIUS = 14;
+
+// ─── State ────────────────────────────────────────────────────────────
+let activeCity = null;
+let items = [];          // computed marker/label positions for the active city
+let polarK = 1;          // px per minute (city-specific scale)
+let hovered = null;
+let selected = null;
+
+const svgRoot = document.querySelector("svg");
+const chartGroup = document.getElementById("chart");
+
+// ─── Helpers ──────────────────────────────────────────────────────────
+const pad = n => String(n).padStart(2, "0");
+
+const niceStep = (maxMin) => {
+  const raw = maxMin / TARGET_RINGS;
+  return RING_STEPS.find(s => s >= raw) ?? RING_STEPS[RING_STEPS.length - 1];
+};
+
+const radius = (min) => CHART_R_MIN + min * polarK;
+
+const formatArrival = (durationMin) => {
+  const dep = activeCity.departure;
+  const total = dep.hour * 60 + dep.minute + durationMin;
+  const days = Math.floor(total / 1440);   // 1440 min = 24h
+  const h = Math.floor((total % 1440) / 60);
+  const m = total % 60;
+  // Suffix +1d/+2d when the arrival crosses midnight (matters for nationwide).
+  const suffix = days > 0 ? `+${days}d` : "";
+  return `${h}:${pad(m)}${suffix}`;
+};
+
+const escapeXml = (s) => String(s)
+  .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+
+// ─── Rendering ────────────────────────────────────────────────────────
+const renderPicker = () => {
+  const root = document.getElementById("picker-buttons");
+  root.innerHTML = "";
+  for (const key of ORDER) {
+    const c = REGISTRY[key];
+    const btn = document.createElement("button");
+    btn.className = "picker-btn";
+    btn.dataset.city = key;
+    btn.dataset.empty = c.rows.length === 0 ? "true" : "false";
+    btn.textContent = c.pickerLabel ?? c.displayName;
+    btn.addEventListener("click", () => selectCity(key));
+    root.appendChild(btn);
+  }
+};
+
+const updatePickerActive = () => {
+  document.querySelectorAll(".picker-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.city === activeCity.key);
+  });
+};
+
+const renderTitle = () => {
+  const c = activeCity;
+  const dep = c.departure;
+  const titleLine = `★ ${c.titleOrigin} ⇒ ${c.destLabel}`;
+  const subLine = `แผนที่เวลาถึง ออกเดินทางจาก${c.origin}ตอน วัน${dep.dayThai} เวลา ${pad(dep.hour)}:${pad(dep.minute)} น.`;
+  document.getElementById("title-group").innerHTML = `
+    <rect class="title-bar" x="20" y="20" width="930" height="92" rx="8"/>
+    <text x="38" y="58" class="title-text" font-size="22">
+      <tspan class="star">★</tspan> ${escapeXml(c.titleOrigin)} ⇒ ${escapeXml(c.destLabel)}
+    </text>
+    <text x="38" y="93" class="title-text" font-size="18">
+      ${escapeXml(subLine)}
+    </text>
+  `;
+};
+
+const renderNotes = () => {
+  const c = activeCity;
+  const dep = c.departure;
+  const N = c.rows.length;
+  const lines = [];
+  if (N > 0) {
+    const isTransit = c.travelMode === "TRANSIT";
+    const samples = c.departureSamples ?? [0];
+    const isWorstCase = samples.length > 1;
+    lines.push(`• ${N} ${c.destUnit} จาก${c.origin}`);
+    lines.push(`  ออกเดินทาง ${pad(dep.hour)}:${pad(dep.minute)} น. (${c.timeContext})`);
+    if (isTransit) {
+      lines.push(`• ใช้ข้อมูลขนส่งสาธารณะจาก Google Routes API`);
+      lines.push(`  (TRANSIT — BTS / MRT / รถเมล์)`);
+    } else if (isWorstCase) {
+      // Render the departure window from the samples list so the user knows
+      // the duration is "worst-case in this window", not median at 08:00.
+      const startMin = dep.hour * 60 + dep.minute;
+      const endMin = startMin + Math.max(...samples);
+      const fmt = (m) => `${Math.floor(m / 60)}:${pad(m % 60)}`;
+      lines.push(`• ใช้เวลาเดินทางสูงสุด (worst-case)`);
+      lines.push(`  (TRAFFIC_AWARE — ออกเดินทาง ${fmt(startMin)}-${fmt(endMin)} น.)`);
+    } else {
+      lines.push(`• ใช้ข้อมูลจราจรเฉลี่ยจาก Google Routes API`);
+      lines.push(`  (TRAFFIC_AWARE — รถยนต์ส่วนตัว)`);
+    }
+    lines.push(c.snapshotDate ? `• อัปเดตข้อมูล: ${c.snapshotDate}` : `• ยังไม่มีวันที่ข้อมูล`);
+  } else {
+    lines.push(`• เมือง: ${c.displayName}`);
+    lines.push(`  จุดเริ่มต้น: ${c.origin}`);
+    lines.push(`• ข้อมูลยังไม่พร้อม`);
+    lines.push(`  รัน \`./prepare_data.py --tour ${c.key}\``);
+    lines.push(`• เลือกเมืองอื่นได้จากปุ่มด้านบน`);
+  }
+  document.getElementById("note-group").innerHTML = `
+    <g transform="translate(40, 145)">
+      <rect class="note-box" width="340" height="125" rx="3"/>
+      <text x="14" y="22" class="note-title">[หมายเหตุ]</text>
+      <text x="14" y="44" class="note-text">${escapeXml(lines[0])}</text>
+      <text x="14" y="60" class="note-text">${escapeXml(lines[1])}</text>
+      <text x="14" y="80" class="note-text">${escapeXml(lines[2])}</text>
+      <text x="14" y="96" class="note-text">${escapeXml(lines[3])}</text>
+      <text x="14" y="116" class="note-text" fill="#888">${escapeXml(lines[4])}</text>
+    </g>
+  `;
+};
+
+const renderCenter = () => {
+  const c = activeCity;
+  document.getElementById("center").innerHTML = `
+    <circle class="center-circle" r="${CHART_R_MIN}"/>
+    <text class="center-text" y="-3">${escapeXml(c.originShort.line1)}</text>
+    <text class="center-text" y="16">${escapeXml(c.originShort.line2)}</text>
+  `;
+};
+
+const clearChart = () => {
+  for (const id of ["rings", "ring-labels", "spokes", "markers", "labels", "empty-state"]) {
+    document.getElementById(id).innerHTML = "";
+  }
+};
+
+const renderEmptyState = () => {
+  document.getElementById("empty-state").innerHTML = `
+    <text class="empty-state" y="180">🏗 ข้อมูลยังไม่พร้อม</text>
+    <text class="empty-state-hint" y="210">รัน pipeline เพื่อสร้างข้อมูลของเมืองนี้</text>
+  `;
+};
+
+const renderRings = (maxMin) => {
+  const step = niceStep(maxMin);
+  const ringsG = document.getElementById("rings");
+  const labelsG = document.getElementById("ring-labels");
+  const dep = activeCity.departure;
+  const startMin = dep.hour * 60 + dep.minute;
+  for (let m = step; m <= maxMin + step / 2; m += step) {
+    const r = radius(m);
+    const ring = document.createElementNS(SVG_NS, "circle");
+    ring.setAttribute("class", "ring");
+    ring.setAttribute("r", r.toFixed(1));
+    ringsG.appendChild(ring);
+
+    const arrival = startMin + m;
+    const days = Math.floor(arrival / 1440);
+    const ah = Math.floor((arrival % 1440) / 60);
+    const am = arrival % 60;
+    const lbl = document.createElementNS(SVG_NS, "text");
+    lbl.setAttribute("class", "ring-label");
+    lbl.setAttribute("x", "5");
+    lbl.setAttribute("y", (-r).toFixed(1));
+    lbl.setAttribute("dy", "-4");
+    lbl.textContent = days > 0 ? `${ah}:${pad(am)}+${days}d` : `${ah}:${pad(am)}`;
+    labelsG.appendChild(lbl);
+  }
+};
+
+const computeItems = () => {
+  return activeCity.rows.map(([name, time, bearing]) => {
+    const r = radius(time);
+    const θ = (bearing * Math.PI) / 180;
+    const markerX = r * Math.sin(θ);
+    const markerY = -r * Math.cos(θ);
+    const onRight = markerX >= 0;
+    return {
+      name, time, markerX, markerY, onRight,
+      labelX: onRight ? markerX + 11 : markerX - 11,
+      labelY: markerY + 4.5,
+      nudged: false,
+    };
+  });
+};
+
+// Use the empty half of the chart when one side is heavily overloaded (e.g.
+// CNX-nationwide: ~70 destinations on the right, 6 on the left). Flip the
+// markers closest to the vertical axis (smallest |markerX|, so the cross is
+// short) from the overloaded side to the under-utilized one. Their leader
+// lines will cross the chart center, but they fill the empty space rather
+// than being clamped at the bottom of an already-stacked column.
+const balanceSides = (items) => {
+  const right = items.filter(it =>  it.onRight);
+  const left  = items.filter(it => !it.onRight);
+  // To equalize from N:M, move (N-M)/2 — that brings both sides to (N+M)/2.
+  const numToMove = Math.floor(Math.abs(right.length - left.length) / 2);
+  if (numToMove < 5) return;            // already roughly balanced
+
+  const donor = right.length > left.length ? right : left;
+  // Sort donor markers by |markerX| ascending — the closer to x=0, the shorter
+  // the cross-chart leader after flipping.
+  donor.sort((a, b) => Math.abs(a.markerX) - Math.abs(b.markerX));
+
+  for (let i = 0; i < numToMove; i++) {
+    const it = donor[i];
+    it.onRight = !it.onRight;
+    it.labelX = it.onRight ? it.markerX + 11 : it.markerX - 11;
+    it.nudged = true;            // ensures a leader line is drawn from marker to flipped label
+  }
+};
+
+const nudgeColumn = (side, opts) => {
+  const { minGap, nudgeDx, yMin, yMax, fanStep, fanCap } = opts;
+  side.sort((a, b) => a.labelY - b.labelY);
+  let prev = side[0];
+  // cascadeDepth: how many consecutive in-column labels we've nudged so far.
+  // Each step adds `fanStep` to the horizontal offset (capped at `fanCap`),
+  // so leaders fan diagonally instead of stacking parallel — readable for
+  // dense bearing-clusters (e.g. BKK-south or CNX-southwest provinces).
+  let cascadeDepth = 0;
+  for (let i = 1; i < side.length; i++) {
+    const cur = side[i];
+    if (Math.abs(cur.markerX - prev.markerX) > X_SIMILARITY) {
+      cascadeDepth = 0;
+      prev = cur;
+      continue;
+    }
+    if (cur.labelY - prev.labelY < minGap) {
+      // Clamp to viewport bottom — without it, cascade nudges on dense tours
+      // compound past the SVG edge. Mild overlap is recoverable; off-screen isn't.
+      cur.labelY = Math.min(prev.labelY + minGap, yMax);
+      cascadeDepth++;
+      const fan = Math.min(cascadeDepth * fanStep, fanCap);
+      const dx  = nudgeDx + fan;
+      cur.labelX = cur.onRight ? cur.markerX + dx : cur.markerX - dx;
+      cur.nudged = true;
+    } else {
+      // Gap big enough — cascade group ends, next nudge starts fresh.
+      cascadeDepth = 0;
+    }
+    prev = cur;
+  }
+  // Top-side guard: rare but cheap insurance against natural-Y above the top.
+  for (const it of side) {
+    if (it.labelY < yMin) { it.labelY = yMin; it.nudged = true; }
+  }
+};
+
+const renderItems = () => {
+  const spokesG = document.getElementById("spokes");
+  const markersG = document.getElementById("markers");
+  const labelsG = document.getElementById("labels");
+  const c = activeCity;
+
+  for (const it of items) {
+    const spoke = document.createElementNS(SVG_NS, "line");
+    spoke.setAttribute("x1", 0); spoke.setAttribute("y1", 0);
+    spoke.setAttribute("x2", it.markerX.toFixed(2));
+    spoke.setAttribute("y2", it.markerY.toFixed(2));
+    spoke.setAttribute("class", "spoke");
+    spoke.setAttribute("data-amphoe", it.name);
+    spokesG.appendChild(spoke);
+
+    if (it.nudged) {
+      const leader = document.createElementNS(SVG_NS, "line");
+      leader.setAttribute("x1", it.markerX.toFixed(2));
+      leader.setAttribute("y1", it.markerY.toFixed(2));
+      leader.setAttribute("x2", it.labelX.toFixed(2));
+      leader.setAttribute("y2", (it.labelY - 4.5).toFixed(2));
+      leader.setAttribute("class", "leader");
+      leader.setAttribute("data-amphoe", it.name);
+      spokesG.appendChild(leader);
+    }
+
+    const circ = document.createElementNS(SVG_NS, "circle");
+    circ.setAttribute("cx", it.markerX.toFixed(2));
+    circ.setAttribute("cy", it.markerY.toFixed(2));
+    circ.setAttribute("r", 6.5);
+    circ.setAttribute("class", "marker");
+    circ.setAttribute("data-amphoe", it.name);
+    markersG.appendChild(circ);
+
+    const text = document.createElementNS(SVG_NS, "text");
+    text.setAttribute("x", it.labelX.toFixed(2));
+    text.setAttribute("y", it.labelY.toFixed(2));
+    text.setAttribute("class", "amphoe-label");
+    text.setAttribute("text-anchor", it.onRight ? "start" : "end");
+    text.setAttribute("data-amphoe", it.name);
+    const nameTspan = document.createElementNS(SVG_NS, "tspan");
+    nameTspan.textContent = `${c.destPrefix}${it.name} `;
+    text.appendChild(nameTspan);
+    const timeTspan = document.createElementNS(SVG_NS, "tspan");
+    timeTspan.textContent = formatArrival(it.time);
+    timeTspan.setAttribute("class", "amphoe-time");
+    text.appendChild(timeTspan);
+    labelsG.appendChild(text);
+    it.labelEl = text;
+  }
+
+  // Capture rendered bboxes for hit-testing.
+  for (const it of items) it.labelBBox = it.labelEl.getBBox();
+};
+
+// ─── Top-level render ─────────────────────────────────────────────────
+const renderCity = () => {
+  clearChart();
+  renderTitle();
+  renderNotes();
+  renderCenter();
+  hovered = null;
+  selected = null;
+  svgRoot.removeAttribute("data-active");
+
+  if (activeCity.rows.length === 0) {
+    items = [];
+    renderEmptyState();
+    svgRoot.classList.remove("dense");
+    return;
+  }
+
+  // Density-adapt for crowded tours (e.g. nationwide = 76). Smaller font (CSS),
+  // tighter gap, smaller nudge offset, shrunk polar radius (so labels have
+  // horizontal breathing room past the markers), and progressive fan-out for
+  // cascading nudges so leaders don't stack as parallel columns.
+  const dense = activeCity.rows.length >= 50;
+  svgRoot.classList.toggle("dense", dense);
+  const chartRMax = dense ? 360 : CHART_R_MAX;
+  const minGap    = dense ? 13  : MIN_GAP;
+  const nudgeDx   = dense ? 24  : NUDGE_DX;
+  const yMin      = dense ? -430 : -445;
+  const yMax      = dense ?  430 :  445;
+  // Fan-out: each successive nudged label in a cascade group gets pushed
+  // further horizontally by `fanStep`, up to `fanCap` extra px. The slope
+  // (fanStep / minGap) sets the leader-line angle: with 8/13 ≈ 32° from
+  // vertical for dense, leaders form a clear arc rather than a column.
+  // Sparse tours get a smaller fan — even 4-5-deep clusters in cnx-district
+  // benefit. Caps sized so the deepest-cascade label's text right-edge stays
+  // inside the SVG viewBox at the worst-case marker X.
+  const fanStep   = dense ? 8  : 4;
+  const fanCap    = dense ? 60 : 24;
+
+  const maxMin = Math.max(...activeCity.rows.map(r => r[1]));
+  polarK = (chartRMax - CHART_R_MIN) / maxMin;
+
+  renderRings(maxMin);
+  items = computeItems();
+  // Cross-side rebalancing only kicks in for dense tours where the natural
+  // bearing distribution lopsides one side. CNX nationwide is the worst case
+  // (~70 right / 6 left); BKK nationwide is also imbalanced but milder.
+  if (dense) balanceSides(items);
+  const opts = { minGap, nudgeDx, yMin, yMax, fanStep, fanCap };
+  nudgeColumn(items.filter(it => !it.onRight), opts);
+  nudgeColumn(items.filter(it =>  it.onRight), opts);
+  renderItems();
+};
+
+const selectCity = (key) => {
+  const c = REGISTRY[key];
+  if (!c) return;
+  activeCity = c;
+  localStorage.setItem(STORAGE_KEY, key);
+  updatePickerActive();
+  renderCity();
+};
+
+// ─── Interaction (hover preview + click to lock) ─────────────────────
+const toLocal = (e) => {
+  const pt = svgRoot.createSVGPoint();
+  pt.x = e.clientX;
+  pt.y = e.clientY;
+  const ctm = chartGroup.getScreenCTM();
+  return ctm ? pt.matrixTransform(ctm.inverse()) : { x: 0, y: 0 };
+};
+
+const hitTest = (x, y) => {
+  let best = null, minDist = HIT_RADIUS;
+  for (const it of items) {
+    const d = Math.hypot(x - it.markerX, y - it.markerY);
+    if (d < minDist) { minDist = d; best = it.name; }
+  }
+  if (best) return best;
+  for (const it of items) {
+    const b = it.labelBBox;
+    if (b && x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height) {
+      return it.name;
+    }
+  }
+  return null;
+};
+
+const setHovered = (name) => {
+  if (hovered === name) return;
+  hovered = name;
+  applyState();
+};
+
+const setSelected = (name) => {
+  if (selected === name) return;
+  selected = name;
+  applyState();
+};
+
+const applyState = () => {
+  const effective = hovered ?? selected;
+  document.querySelectorAll("[data-amphoe]").forEach(el => {
+    const name = el.getAttribute("data-amphoe");
+    el.classList.toggle("active",   name === effective);
+    el.classList.toggle("selected", name === selected);
+  });
+  if (effective) svgRoot.setAttribute("data-active", "");
+  else           svgRoot.removeAttribute("data-active");
+};
+
+svgRoot.addEventListener("mousemove", e => {
+  if (!items.length) return;
+  const p = toLocal(e);
+  setHovered(hitTest(p.x, p.y));
+});
+svgRoot.addEventListener("mouseleave", () => setHovered(null));
+svgRoot.addEventListener("click", e => {
+  if (!items.length) return;
+  const p = toLocal(e);
+  const name = hitTest(p.x, p.y);
+  setSelected(name === selected ? null : name);
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") setSelected(null);
+});
+
+// ─── Boot ─────────────────────────────────────────────────────────────
+renderPicker();
+selectCity(pickInitialTour());
+</script>
+
+</body>
+</html>
